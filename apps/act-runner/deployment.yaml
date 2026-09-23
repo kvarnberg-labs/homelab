@@ -27,17 +27,39 @@ spec:
             - sh
             - -c
             - |
-              if [ ! -f /data/config.yaml ]; then
-                forgejo-runner generate-config > /data/config.yaml
-                # Use host networking for job containers so they can reach DinD at localhost:2375
-                sed -i 's|  docker_host: "-"|  docker_host: "tcp://localhost:2375"\n  network: "host"\n  privileged: true|' /data/config.yaml
-                # Inject forgejo.lan host entry (k3s node uses 1.1.1.1 DNS, not pihole, so .lan doesn't resolve)
-                sed -i 's|  options:|  options: "--add-host=forgejo.lan:192.168.1.205"|' /data/config.yaml
-                # Allow all volume mounts (runner needs to mount workspace + actions into job containers)
-                sed -i 's|  valid_volumes: \[\]|  valid_volumes:\n    - "**"|' /data/config.yaml
-                # Use node:20-bookworm-slim as job container image (has Node.js for actions; add git+docker-cli in workflow)
-                sed -i 's|  labels: \[\]|  labels:\n    - "self-hosted:docker://node:20-bookworm-slim"\n    - "linux:docker://node:20-bookworm-slim"\n    - "amd64:docker://node:20-bookworm-slim"|' /data/config.yaml
-              fi
+              # Regenerate on every start so this repo is the source of truth for the
+              # runner config. The registration itself lives in /data/.runner and is
+              # preserved, so this does not re-register the runner.
+              forgejo-runner generate-config > /data/config.yaml.new || {
+                echo "FATAL: forgejo-runner generate-config failed"; exit 1
+              }
+              # Use host networking for job containers so they can reach DinD at localhost:2375.
+              # Deliberately NOT privileged: image builds go through the DinD sidecar via
+              # container.docker_host, so job containers need no privileged mode. act's
+              # mergeJobOptions ignores --privileged in a workflow's container.options, so
+              # this is a real boundary, not just a default.
+              sed -i 's|  network: ""|  network: "host"|' /data/config.yaml.new
+              sed -i 's|  docker_host: "-"|  docker_host: "tcp://localhost:2375"|' /data/config.yaml.new
+              # Inject forgejo.lan host entry (k3s node uses 1.1.1.1 DNS, not pihole, so .lan doesn't resolve)
+              sed -i 's|  options:|  options: "--add-host=forgejo.lan:192.168.1.205"|' /data/config.yaml.new
+              # valid_volumes is deliberately left at its documented default ([]): no
+              # workflow may mount volumes. The runner appends its own workspace and
+              # docker-socket mounts to ValidVolumes itself (act run_context.go), so
+              # this does not break the runner.
+              # Use node:20-bookworm-slim as job container image (has Node.js for actions; add git+docker-cli in workflow)
+              sed -i 's|  labels: \[\]|  labels:\n    - "self-hosted:docker://node:20-bookworm-slim"\n    - "linux:docker://node:20-bookworm-slim"\n    - "amd64:docker://node:20-bookworm-slim"|' /data/config.yaml.new
+              # Keep the log level that the runner is currently running with
+              # (the generated default is info). Change here if you want info.
+              sed -i 's|  level: info|  level: debug|' /data/config.yaml.new
+              # Fail loudly if upstream's config format drifts and a sed silently no-ops
+              grep -q 'level: debug' /data/config.yaml.new || { echo "FATAL: log level sed did not apply"; exit 1; }
+              grep -q 'docker_host: "tcp://localhost:2375"' /data/config.yaml.new || { echo "FATAL: docker_host sed did not apply"; exit 1; }
+              grep -q 'forgejo.lan:192.168.1.205' /data/config.yaml.new || { echo "FATAL: options sed did not apply"; exit 1; }
+              grep -q 'self-hosted:docker://node:20-bookworm-slim' /data/config.yaml.new || { echo "FATAL: labels sed did not apply"; exit 1; }
+              [ "$(grep -c '^  network:' /data/config.yaml.new)" = "1" ] || { echo "FATAL: network key not exactly once (upstream's sed format drifted)"; exit 1; }
+              grep -q 'valid_volumes: \[\]' /data/config.yaml.new || { echo "FATAL: valid_volumes not at documented default"; exit 1; }
+              if grep -q 'privileged: true' /data/config.yaml.new; then echo "FATAL: privileged is true"; exit 1; fi
+              mv /data/config.yaml.new /data/config.yaml
               token_hash="$(printf '%s' "$REGISTRATION_TOKEN" | sha256sum | awk '{print $1}')"
               if [ -f /data/.runner ] && [ "$(cat /data/.registration-token-sha256 2>/dev/null || true)" != "$token_hash" ]; then
                 rm -f /data/.runner
