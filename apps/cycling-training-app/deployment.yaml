@@ -6,7 +6,11 @@ metadata:
   labels:
     app: cycling-training-app
 spec:
-  replicas: 1
+  # ponytail: taken offline 2026-09-23 — ghcr.io/kvarnberg-labs/cycling-training-app:latest
+  # no longer pulls (ghcr 401 anonymous / 403 with the stored credential in
+  # forgejo-registry-secret). Set back to 1 once the ghcr token is rotated or the
+  # image is republished to forgejo.lan.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
