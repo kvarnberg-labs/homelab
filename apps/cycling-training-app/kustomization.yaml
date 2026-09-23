@@ -8,5 +8,5 @@ resources:
   - service.yaml
   - ingress.yaml
   - tailscale-ingress.yaml
-  - registry-secret.yaml
-  - secrets.yaml
+  - registry-sealed-secret.yaml
+  - cycling-training-app-sealed-secret.yaml
